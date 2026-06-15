@@ -1,9 +1,9 @@
 {
-  "frontend_rev": 1,
-  "frontend_build": "2026-06-14-selfupdate",
+  "frontend_rev": 2,
+  "frontend_build": "2026-06-14-offline-fonts",
   "frontend_url": "https://raw.githubusercontent.com/caddaman/Opportunity-Tracker/main/Frontend/index.html",
-  "frontend_sha256": "4cd82dd1f2af239603361a9dd369526d61bdbebe1625216a65bbcbe162e6d657",
+  "frontend_sha256": "4b64c473d508d5524599da6f0c7541ba3f53f6d8ab90738358f41e77bd289c62",
   "app_version": "1.0.0",
   "app_download_url": "",
-  "notes": "Initial release: themes + theme builder, confetti styles, money-won, self-update"
+  "notes": "Self-hosted fonts (DM Sans + JetBrains Mono) \u2014 fully offline UI, no Google Fonts CDN"
 }
