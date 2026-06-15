@@ -382,6 +382,19 @@ const DOC_ICONS={resume:'📄',cv:'📋',transcript:'🎓',writing_sample:'✍�
 const PAGES=[['dashboard','📊 Dashboard'],['discover','🔍 Discover'],['risk','⚠ Triage'],['pipeline','🗂 Pipeline'],['library','📁 Library'],['recs','📬 Recs'],['alerts','🔔 Alerts'],['report','🌙 Report'],['email','📧 Email'],['profile','👤 Profile']];
 const TIER_INFO={'gov/intl':{cls:'tb-gov',lbl:'Gov / Intl'},'elite-fellowship':{cls:'tb-gov',lbl:'Elite Fellowship'},'major-foundation':{cls:'tb-found',lbl:'Major Foundation'},'ngo/think-tank':{cls:'tb-ngo',lbl:'NGO / Think Tank'},'university/hospital':{cls:'tb-uni',lbl:'University'},'health-org':{cls:'tb-uni',lbl:'Health Org'},'other':{cls:'tb-other',lbl:'Other'}};
 const BUCKET_META=[{icon:'⏳',lbl:'Closing Soon — Apply Now (by deadline)',color:'var(--red)'},{icon:'⭐',lbl:'Top Prestige — Apply Now',color:'var(--blue)'},{icon:'⚡',lbl:'Remote / Stackable / Networking — Due Soon',color:'var(--green)'},{icon:'📋',lbl:'Top Prestige — Start Preparing',color:'var(--purple)'},{icon:'🌐',lbl:'Remote / Stackable / Networking — Queue Up',color:'var(--teal)'},{icon:'📌',lbl:'Other Opportunities',color:'var(--dim)'}];
+// ── Letter-grade display (type-specific grade from the backend: grade / grade_score / primary_type) ──
+const GRADE_COLOR={'A+':'#1f9d63','A':'#1f9d63','A-':'#2fae6f','B+':'#3056d3','B':'#3a74e0','B-':'#5089ea','C+':'#e08a1e','C':'#e08a1e','C-':'#d98b2a','D':'#d3683b','F':'#d33b4d'};
+// Grouping bands for the ranked view (A→F sections), shown best-first.
+const GRADE_BANDS=[['A','🟢','A — Excellent','#1f9d63'],['B','🔵','B — Strong','#3056d3'],['C','🟠','C — Fair','#e08a1e'],['D','🟤','D — Weak','#d3683b'],['F','🔴','F — Long shot','#d33b4d']];
+function gradeColor(g){return GRADE_COLOR[g]||'var(--dim)'}
+function gradeBand(o){const g=String(o&&o.grade||'F')[0];return 'ABCDF'.includes(g)?g:'F'}
+function gradeBadge(o,big){
+  if(!o||o.grade==null)return null;
+  const g=o.grade,c=gradeColor(g);
+  const sz=big?'font-size:16px;min-width:36px;padding:4px 9px':'font-size:12px;min-width:26px;padding:2px 7px';
+  const tip='Grade '+g+(o.grade_score!=null?' — '+o.grade_score+'/100':'')+(o.primary_type&&o.primary_type!=='general'?' (graded as '+o.primary_type+')':'');
+  return h('span',{title:tip,style:'display:inline-flex;align-items:center;justify-content:center;'+sz+';font-weight:800;border-radius:8px;letter-spacing:.3px;background:'+c+';color:#fff'},g);
+}
 
 let S={
   page:'dashboard',tab:'upcoming',
@@ -422,7 +435,7 @@ async function api(m,path,body){
   return r.json();
 }
 
-async function load(){try{const[o,s]=await Promise.all([api('GET','/api/opportunities'),api('GET','/api/stats')]);ss({opps:o,stats:s,loading:false});checkAchievements()}catch(e){toast('err','Load failed: '+e.message);ss({loading:false})}}
+async function load(){try{const[o,s]=await Promise.all([api('GET','/api/opportunities?graded=true'),api('GET','/api/stats')]);ss({opps:o,stats:s,loading:false});checkAchievements()}catch(e){toast('err','Load failed: '+e.message);ss({loading:false})}}
 async function loadLabs(){try{const l=await api('GET','/api/labs');ss({labs:l})}catch(e){toast('err',e.message)}}
 async function loadEssays(){try{const e=await api('GET','/api/essays');ss({essays:e})}catch(e){toast('err',e.message)}}
 async function loadDocs(){try{const d=await api('GET','/api/documents');ss({docs:d})}catch(e){toast('err',e.message)}}
@@ -946,6 +959,14 @@ function eligBadge(o){const ec=eligOf(o);if(!ec||!ec.status||ec.status==='unknow
   if(!m)return null;const tip=(ec.blockers||[]).concat(ec.reasons||[]).join(' ');
   return h('span',{className:'tier-badge',style:'background:'+m[1]+';color:'+m[2],title:tip||m[0]},m[0]);}
 
+// Master-DB freshness helpers. daysAgo → whole days since an ISO timestamp (or null).
+function daysAgo(iso){if(!iso)return null;const t=Date.parse(iso);if(isNaN(t))return null;return Math.floor((Date.now()-t)/86400000);}
+function relSeen(iso){const d=daysAgo(iso);if(d===null)return null;return d<=0?'today':d===1?'yesterday':d<30?d+'d ago':d<365?Math.round(d/30)+'mo ago':Math.round(d/365)+'y ago';}
+// An expired opportunity our crawler just found open again (within ~120 days of the reopen).
+function reopenedRecently(o){const d=daysAgo(o&&o.reopened_at);return d!==null&&d<=120;}
+function reopenedBadge(o){if(!reopenedRecently(o))return null;
+  return h('span',{className:'tier-badge',style:'background:rgba(38,196,134,.16);color:var(--green)',title:'Previously expired — detected open again on '+(o.reopened_at||'').slice(0,10)+(o.deadline?' · deadline now '+fd(o.deadline):'')},'♻ Available again');}
+
 function h(tag,attrs,...ch){
   const el=document.createElement(tag);
   if(attrs)for(const[k,v]of Object.entries(attrs)){
@@ -1405,10 +1426,14 @@ function buildDashboard(main){
      main.appendChild(wb);}}
   buildClosingSoon(main);
   const TAB_NAMES={upcoming:'Upcoming Deadlines',past:'Past',recurring:'Recurring',rolling:'Rolling Admissions',missed:'Watch List — Next Cycle',all:'All Opportunities'};
-  const filtered=filterOpps();
+  let filtered=filterOpps();
+  // Optional "Sort: Grade" — orders the list strictly best letter-grade first.
+  if(S.listSort==='grade')filtered=filtered.slice().sort((a,b)=>(b.grade_score||0)-(a.grade_score||0)||((du(a.deadline)??1e9)-(du(b.deadline)??1e9)));
   main.appendChild(h('div',{className:'ph'},
     h('div',{},h('div',{className:'pt'},TAB_NAMES[S.tab]||'Opportunities'),h('div',{className:'ps'},filtered.length+' results'+(S.filterStatus?' · '+S.filterStatus:''))),
-    h('div',{className:'pa'},S.tab==='missed'?h('button',{className:'btn btn-miss btn-sm',onClick:openMissed},'+ Track Missed'):null)
+    h('div',{className:'pa'},
+      h('button',{className:'btn btn-sm '+(S.listSort==='grade'?'btn-primary':'btn-ghost'),title:'Sort by letter grade (best first)',onClick:()=>ss({listSort:S.listSort==='grade'?'':'grade'})},S.listSort==='grade'?'▼ Grade':'↕ Grade'),
+      S.tab==='missed'?h('button',{className:'btn btn-miss btn-sm',onClick:openMissed},'+ Track Missed'):null)
   ));
   main.appendChild(buildFrow());
   main.appendChild(buildTypeBar(o=>dashScope(o)&&matchesFilters(o,true)));
@@ -1563,11 +1588,12 @@ function buildRankedCard(o){
   const bar=h('div',{className:'sbar2'});
   [['prestige','sb-prestige'],['urgency','sb-urgency'],['remote_score','sb-remote'],['stack_score','sb-stack']].forEach(([k,cls])=>{const w=Math.round((s2[k]||0)/100*60);if(w>0)bar.appendChild(h('div',{className:cls,style:`flex:${s2[k]||0};height:4px`}))});
   left.appendChild(bar);
-  const meta2=h('div',{className:'om',style:'margin-top:5px'});meta2.appendChild(mk.badge(o.status));if(((o._scores||{}).outcome_affinity||0)>0)meta2.appendChild(h('span',{className:'tier-badge',style:'background:rgba(90,150,230,.13);color:var(--accent)',title:'Similar to opportunities you\'ve applied to — boosted'},'↑ your track record'));(o.tags||[]).slice(0,3).forEach(t=>meta2.appendChild(mk.tag(t)));left.appendChild(meta2);
+  const meta2=h('div',{className:'om',style:'margin-top:5px'});meta2.appendChild(mk.badge(o.status));{const rb=reopenedBadge(o);if(rb)meta2.appendChild(rb);}if(((o._scores||{}).outcome_affinity||0)>0)meta2.appendChild(h('span',{className:'tier-badge',style:'background:rgba(90,150,230,.13);color:var(--accent)',title:'Similar to opportunities you\'ve applied to — boosted'},'↑ your track record'));(o.tags||[]).slice(0,3).forEach(t=>meta2.appendChild(mk.tag(t)));left.appendChild(meta2);
   card.appendChild(left);
   const right=h('div',{className:'or'});
-  right.appendChild(h('div',{className:'mono',style:'font-size:13px;font-weight:600;color:var(--accent)'},o._total_score+'pts'));
-  right.appendChild(h('div',{className:'dval'},fd(o.deadline)||'—'));
+  {const gb=gradeBadge(o,true);if(gb)right.appendChild(gb);}
+  right.appendChild(h('div',{className:'mono',style:'font-size:10px;color:var(--dim);margin-top:3px'},o._total_score+'pts'));
+  right.appendChild(h('div',{className:'dval',style:'margin-top:3px'},fd(o.deadline)||'—'));
   const dc=mk.days(o.deadline);if(dc)right.appendChild(dc);
   card.appendChild(right);return card;
 }
@@ -1587,6 +1613,7 @@ function buildOppCard(o){
   if(o.description)left.appendChild(h('div',{className:'od'},o.description));
   const meta=h('div',{className:'om'});
   meta.appendChild(mk.badge(o.status));
+  const rb=reopenedBadge(o);if(rb)meta.appendChild(rb);
   const eb=eligBadge(o);if(eb)meta.appendChild(eb);
   if(o.missed)meta.appendChild(mk.tag('📌 watch','tag-m'));else if(o.recurring)meta.appendChild(mk.tag('↺ recurring','tag-r'));
   if(isRemote(o))meta.appendChild(mk.tag('remote','tag-remote'));
@@ -1594,6 +1621,7 @@ function buildOppCard(o){
   if(o.url)meta.appendChild(h('span',{className:'ourl'},o.url.replace(/^https?:\/\//,'')));
   left.appendChild(meta);card.appendChild(left);
   const right=h('div',{className:'or'});
+  {const gb=gradeBadge(o);if(gb)right.appendChild(h('div',{style:'margin-bottom:6px'},gb));}
   right.appendChild(h('div',{className:'dlbl'},o.missed?'Est. Next':'Deadline'));
   right.appendChild(h('div',{className:'dval'+(o.missed?' miss-c':'')},fd(o.deadline)||'—'));
   const dc=mk.days(o.deadline,o.missed);if(dc)right.appendChild(dc);
@@ -1836,28 +1864,27 @@ function buildDiscover(main){
   if(nIneligible){const ft=h('label',{style:'display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--dim);margin:4px 0 10px;cursor:pointer'});
     const cb=h('input',{type:'checkbox'});cb.checked=!!s.hideIneligible;cb.addEventListener('change',e=>ss({hideIneligible:e.target.checked}));
     ft.appendChild(cb);ft.appendChild(h('span',{},'Hide '+nIneligible+' likely-ineligible'));main.appendChild(ft);}
-  // Group by bucket (apply cross-cutting filters before grouping so bucket counts reflect them)
-  const byBucket={0:[],1:[],2:[],3:[],4:[]};
+  // Order: pin Closing-Soon (real deadline ≤60d, kept by deadline), then group everything
+  // else strictly by LETTER GRADE (A→F), best-first. (Cross-cutting filters applied first.)
   const rankedShown=s.ranked
     .filter(o=>!(s.hideIneligible&&o.eligibility_check&&o.eligibility_check.status==='ineligible'))
     .filter(matchesFilters);
   if(!rankedShown.length){main.appendChild(h('div',{className:'call call-w',style:'margin-top:10px'},'No opportunities match these filters. Modality and fee are inferred and sparse on older listings — try clearing a filter.'));return;}
-  rankedShown.forEach(o=>{const b=o._bucket??4;(byBucket[b]=byBucket[b]||[]).push(o)});
+  const closing=rankedShown.filter(o=>o._bucket===0);                       // already deadline-sorted by the backend
+  const rest=rankedShown.filter(o=>o._bucket!==0).slice()
+    .sort((a,b)=>(b.grade_score||0)-(a.grade_score||0)||((du(a.deadline)??1e9)-(du(b.deadline)??1e9)));
   // Cap rendered cards (full DOM rebuilds on every click — rendering 200 at once freezes).
   let rendered=0;
-  Object.entries(byBucket).forEach(([b,opps])=>{
+  const renderGroup=(icon,label,color,opps)=>{
     if(!opps.length||rendered>=s.listLimit)return;
-    const meta=BUCKET_META[parseInt(b)];
     main.appendChild(h('div',{className:'bucket-hdr'},
-      h('span',{className:'bucket-label',style:'color:'+meta.color},meta.icon+' '+meta.lbl),
+      h('span',{className:'bucket-label',style:'color:'+color},icon+' '+label),
       h('span',{className:'bucket-count'},opps.length)
     ));
-    opps.forEach(o=>{
-      if(rendered>=s.listLimit)return;
-      rendered++;
-      main.appendChild(safeCard(buildRankedCard,o));
-    });
-  });
+    opps.forEach(o=>{if(rendered>=s.listLimit)return;rendered++;main.appendChild(safeCard(buildRankedCard,o))});
+  };
+  renderGroup('⏳','Closing Soon — Apply Now (by deadline)','var(--red)',closing);
+  GRADE_BANDS.forEach(([band,icon,label,color])=>renderGroup(icon,label,color,rest.filter(o=>gradeBand(o)===band)));
   if(rendered<rankedShown.length)main.appendChild(showMoreBtn(rankedShown.length));
 }
 
@@ -2608,7 +2635,7 @@ function buildDetailModal(){
   const o=S.activeOpp,cl=S.checklist;
   const ov=mkOv();const modal=h('div',{className:'modal xl'});
   const tagrow=h('div',{style:'display:flex;flex-wrap:wrap;gap:5px;margin-top:5px'});
-  [h('span',{className:'badge '+bc(o.status)},h('span',{className:'bd'}),o.status),o.missed?mk.tag('📌 watch','tag-m'):o.recurring?mk.tag('↺ recurring','tag-r'):null,isRemote(o)?mk.tag('🌐 remote','tag-remote'):null,...(o.tags||[]).slice(0,4).map(t=>mk.tag(t))].filter(Boolean).forEach(t=>tagrow.appendChild(t));
+  [h('span',{className:'badge '+bc(o.status)},h('span',{className:'bd'}),o.status),reopenedBadge(o),o.missed?mk.tag('📌 watch','tag-m'):o.recurring?mk.tag('↺ recurring','tag-r'):null,isRemote(o)?mk.tag('🌐 remote','tag-remote'):null,...(o.tags||[]).slice(0,4).map(t=>mk.tag(t))].filter(Boolean).forEach(t=>tagrow.appendChild(t));
   modal.appendChild(h('div',{className:'mhdr'+(o.missed?' missed':'')},h('div',{},h('div',{className:'mt2'},o.name),tagrow),h('button',{className:'mcl',onClick:closeModal},'×')));
   const body=h('div',{className:'mbody'});
   const dg=h('div',{className:'dgrid',style:'margin-bottom:13px'});
@@ -2616,6 +2643,8 @@ function buildDetailModal(){
   dg.appendChild(h('div',{},h('div',{className:'dlb'},'Opens'),h('div',{className:'dv m'},fd(o.opening_date||o.estimated_next_open)||'—')));
   dg.appendChild(h('div',{},h('div',{className:'dlb'},'Reminders'),h('div',{className:'dv'},o.reminder_profile==='early'?'⚡ Early 120/90/60d':'Standard 30/7/1d')));
   dg.appendChild(h('div',{},h('div',{className:'dlb'},'Priority'),h('div',{className:'dv'},(o.priority||0)+'/10')));
+  {const ls=relSeen(o.last_seen);if(ls){const srcLbl={discovered:'auto-discovery',search:'your search',user:'added by you',import:'import'}[o.source]||o.source||'';
+    dg.appendChild(h('div',{},h('div',{className:'dlb'},'Last seen'),h('div',{className:'dv',title:'Last confirmed in '+(srcLbl||'a source')+' on '+(o.last_seen||'').slice(0,10)+(o.times_seen?(' · seen '+o.times_seen+'×'):'')},ls+(srcLbl?(' · '+srcLbl):''))));}}
   body.appendChild(dg);
   // Structured requirements & logistics (only render what was extracted/entered).
   const reqCells=[];
@@ -3160,7 +3189,7 @@ function buildAppModal(){
 }
 
 // Boot
-window.__BUILD='2026-06-14-offline-fonts';console.log('Opportunity Tracker build',window.__BUILD);
+window.__BUILD='2026-06-15-grade-badges';console.log('Opportunity Tracker build',window.__BUILD);
 loadPrefs2();initTheme();
 window.addEventListener('wheel',onWheel,{passive:false});
 window.addEventListener('keydown',onKeyScroll);
